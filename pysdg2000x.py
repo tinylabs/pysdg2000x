@@ -36,8 +36,9 @@ class SDG2000X:
         except socket.error:
             raise SDG2000XNetworkException (f'Failed to connect to: {self.ip}')
 
-        # Store builtins
+        # Get builtin and user waveforms
         self.builtins = self.getBuiltinWaveforms ()
+        self.user = self.getUserWaveforms ()
         
     def __enter__(self):
         return self
@@ -50,13 +51,16 @@ class SDG2000X:
             self.rSocket.close ()
             self.rSocket = None
 
-    def _send(self, cmd):
-        cmd += '\n'
+    def _send(self, cmd, binary=None):
         if self.rSocket is None:
             raise SDG2000XNetworkException ('Network connection is closed')
         try:
             cmd = cmd.encode('ascii')
+            print (cmd)
             self.rSocket.sendall (cmd)
+            if binary:
+                self.rSocket.sendall (binary)
+            self.rSocket.sendall (b'\n')
             time.sleep (0.2)
         except:
             raise SDG2000XNetworkException ('Failed to send data')
@@ -106,6 +110,13 @@ class SDG2000X:
                 next (it)
         return d
 
+    def getUserWaveforms(self) -> list:
+        resp = self._sendRecv ('STL? USER', decode='ascii')[9:].split (',')
+        return resp
+
+    def getWaveformList(self) -> list:
+        return list(self.builtins.keys()) + self.user
+    
     def getWaveform(self, name) -> dict:
         '''
         WVDT? Mn or WVDT? USER,name
@@ -113,13 +124,17 @@ class SDG2000X:
         '''
         # Check if builtin
         if name in self.builtins:
-            name = self.builtins[name]
+            _name = self.builtins[name]
         # Must be user waveform
-        else:
-            name = f'USER,{name}'
+        elif name in self.user:
+            _name = f'USER,{name}'
 
         # Get header and parse
-        resp = self._sendRecv (f'WVDT? {name}')
+        try:
+            resp = self._sendRecv (f'WVDT? {_name}')
+        except SDG2000XNetworkException:
+            raise SDG2000XParameterException (f'Waveform not found: {name}')
+        
         end = resp.find(b'WAVEDATA')+9
         binary = resp[end:]
         header = resp[5:end].decode ('ascii').split (',')
@@ -138,12 +153,45 @@ class SDG2000X:
         d['WAVEDATA'] = list(struct.unpack (f'<{cnt}h', binary))
         return d
 
-    def outputEnable(self, channel=1):
-        pass
+    def saveWaveform(self, name, data, ch=1) -> None:
+        '''
+        Stores int16 data as waveform name
+        '''
+        if not isinstance (data, list):
+            raise SDG2000XParameterException ('Invalid data format')
+        # Convert to binary
+        print (data)
+        binary = struct.pack (f'<{len(data)}h', *data)
+        print (binary)
+        # Send to siggen
+        # Why do we need channel here?
+        self._send (f'C{ch}:WVDT WVNM,{name},WAVEDATA,',binary=binary)
+        # Append to user waveforms
+        self.user.append (name)
+        
+    def setArbWaveform(self, name, ch=1):
+        if name in self.builtins.keys():
+            _cmd = f'INDEX,{self.builtins[name][1:]}'
+        elif name in self.user:
+            _cmd = f'NAME,{name}'
+        else:
+            raise SDG2000XParameterException (f'Waveform {name} not found')
+        self._send (f'C{ch}:ARWV {_cmd}')
+    
+    def outputEnable(self, ch=1, load='50'):
+        if load != '50' and load != 'HZ':
+            raise SDG2000XParameterException ('Load must be 50 or HZ')
+        self._send (f'C{ch}:OUTP ON,LOAD,{load}')
+
+    def outputDisable(self, ch=1):
+        self._send (f'C{ch}:OUTP OFF')
     
 if __name__ == '__main__':
 
     with SDG2000X ('192.168.1.150') as sig:
         print (sig.getID())
-        print (sig.getBuiltinWaveforms())
-        print (sig.getWaveform ('demo1_16k'))
+        #sig.saveWaveform ('test2', [0x0, 0x7000, 0x7000, 0x0, 0x0])
+        #print (sig.getUserWaveforms ())
+        sig.outputDisable (ch=1)
+        sig.setArbWaveform ('psk')
+        sig.outputEnable (ch=1)

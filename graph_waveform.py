@@ -10,17 +10,21 @@ import sys
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument ('--name')
+    parser.add_argument ('-n', '--name')
+    parser.add_argument ('-l', '--list', action='store_true')
     args = parser.parse_args ()
 
-    if not args.name:
+    if not args.name and not args.list:
         parser.print_help ()
         sys.exit (-1)
         
     with SDG2000X ('192.168.1.150') as sig:
-        resp = sig.getWaveform (args.name)
-        waveform = resp['WAVEDATA']
+        if args.name:
+            resp = sig.getWaveform (args.name)
+            waveform = resp['WAVEDATA']
 
-        # Create plot
-        plt.plot (waveform)
-        plt.show ()
+            # Create plot
+            plt.plot (waveform)
+            plt.show ()
+        elif args.list:
+            print (sig.getWaveformList ())
